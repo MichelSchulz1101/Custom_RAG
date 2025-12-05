@@ -35,8 +35,9 @@ vx = vecs.create_client(SUPABASE_DB_URL)
 # - existiert sie noch nicht, wird sie mit dieser Dimension angelegt:
 collection = vx.get_or_create_collection(
     name=COLLECTION_NAME,
-    dimension=1536 # Muss zur Dimensionalität des Embedding-Modells passen
+    dimension=1536,  # Muss zur Dimensionalität des Embedding-Modells passen
 )
+
 
 def chunk_text(text: str, max_chars: int = 1000) -> List[str]:
     """
@@ -46,14 +47,14 @@ def chunk_text(text: str, max_chars: int = 1000) -> List[str]:
     Parameter:
         text (str): Gesamter Eingabetext (z.B. ein ganzer Artikel oder ein Kapitel)
         max_chars_int (int, optional): Maximale Anzahl an Zeichen pro Chunk
-        
+
     Rückgabe:
         Liste von von Text-Chunks (Strings)
     """
     chunks = []
     current = []
     current_len = 0
-    
+
     # Wir trennen grob nach Zeilenumbrüchen:
     for symbol in text.split("\n"):
         # Wenn der akteulle Chunk zu große werden würde, speichern wir ihn ab:
@@ -61,15 +62,16 @@ def chunk_text(text: str, max_chars: int = 1000) -> List[str]:
             chunks.append("\n".join(current))
             current = []
             current_len = 0
-        
+
         current.append(symbol)
         current_len += len(symbol)
-    
+
     # Restlichen Text, falls vorhanden, noch als letzten Chunk hinzufügen:
     if current:
         chunks.append("\n".join(current))
-    
+
     return chunks
+
 
 def embed_texts(texts: List[str]) -> List[List[float]]:
     """
@@ -81,13 +83,11 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
     Returns:
         List[List[float]]: Liste von Embeddins (jede Embedding ist eine Liste von floats)
     """
-    response = client.embeddings.create(
-        input=texts,
-        model=EMBEDDING_MODEL
-    )
-    
+    response = client.embeddings.create(input=texts, model=EMBEDDING_MODEL)
+
     # "response.data" ist eine Liste von Objekten, die jeweils ein Embedding enthalten:
     return [data.embedding for data in response.data]
+
 
 def ingest_document(raw_text: str, source: str) -> int:
     """
@@ -103,15 +103,15 @@ def ingest_document(raw_text: str, source: str) -> int:
     if not chunks:
         return 0
     print(f"Anzahl Chunks: {len(chunks)}")
-    
+
     # 2. Embeddings für alle Chunks erzeugen:
     embeddings = embed_texts(texts=chunks)
-    
+
     # 3. Items für "vecs" vorbereiten:
     # - "vecs" erwartet eine Liste von Tupel: (id, embedding, metadata)
     items = []
     for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
-        
+
         # Eindeutige ID pro Chunk (z.B. "demo_doc_0", "demo_doc_1"...)
         item_id = f"{source}_{i}"
 
@@ -119,26 +119,20 @@ def ingest_document(raw_text: str, source: str) -> int:
         # - source: Woher kommt der Text?
         # - chunk: Laufende Nummer
         # - text: Der eigentliche Text dieses Chunks
-        metadata = {
-            "source": source,
-            "chunk": i,
-            "text": chunk
-        }
-        
-        items.append(
-            (item_id, emb, metadata)
-        )
+        metadata = {"source": source, "chunk": i, "text": chunk}
+
+        items.append((item_id, emb, metadata))
     print(f"Anzahl der Items für 'upsert': {len(items)}")
-    
+
     # 4. Alle Items in die Collection schreiben (upsert = insert oder update):
     collection.upsert(items)
-    
+
     # 5. Index für schnellere Ähnlichkeitssuche erstellen:
     collection.create_index()
-    
+
     print(f"{len(items)} Chunks von '{source}' gespeichert.")
     return len(items)
-    
+
 
 def embed_query(query: str) -> List[float]:
     """
@@ -151,12 +145,10 @@ def embed_query(query: str) -> List[float]:
     Returns:
         List[float]: Ein Embedding
     """
-    resp = client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=[query]
-    )
-    
+    resp = client.embeddings.create(model=EMBEDDING_MODEL, input=[query])
+
     return resp.data[0].embedding
+
 
 def search_similar_chunks(query: str, k: int = 10):
     """
@@ -166,7 +158,7 @@ def search_similar_chunks(query: str, k: int = 10):
     Parameter:
         query (str): Die Nutzerfrage
         k (int, optional): Anzahl der ähnlichsten Chunks
-    
+
     Rückgabe:
         Liste von Treffern, wobei jeder Treffer ein Tupel ist:
         (id, score, metadata)
@@ -178,12 +170,13 @@ def search_similar_chunks(query: str, k: int = 10):
         limit=k,
         measure="cosine_distance",
         include_metadata=True,
-        include_value=True
+        include_value=True,
     )
-    
+
     # Eine Liste von Tupel "(id, score, metadata)" ausgeben:
     return result
-    
+
+
 def build_rag_prompt(question: str, results: List[tuple]) -> str:
     """
     Erzeugt einen vollständigen Prompt für ein RAG-Chatmodell aus der Nutzerfrage und
@@ -200,9 +193,9 @@ def build_rag_prompt(question: str, results: List[tuple]) -> str:
     kontexte = []
     for vec_id, score, metadata in results:
         kontexte.append(metadata["text"])
-    
+
     kontext_block = "\n\n---\n\n".join(kontexte)
-    
+
     prompt = f"""
         ## Allgemein:
         Du bist ein hilfreicher Assistent. Beantworte die Frage ausschließlich mit Hilfe
@@ -214,8 +207,9 @@ def build_rag_prompt(question: str, results: List[tuple]) -> str:
         ## Kontext:
         {kontext_block}
     """
-    
+
     return prompt
+
 
 def answer_question_with_rag(question: str, k: int = 10) -> str:
     """
@@ -234,28 +228,26 @@ def answer_question_with_rag(question: str, k: int = 10) -> str:
     """
     # 1. Kontext-Chunks zur Frage suchen:
     results = search_similar_chunks(query=question, k=k)
-    
+
     # 2. Prompt aus Frage + Kontext bauen:
     prompt = build_rag_prompt(question=question, results=results)
-    
+
     # 3. Chat-Modell aufgrufen (LLM):
     chat_response = client.chat.completions.create(
         model=CHAT_MODEL,
         messages=[
             {
                 "role": "system",
-                "content": "Du bist ein hilfreicher RAG-Assistent, der auf Deutsch antwortet."
+                "content": "Du bist ein hilfreicher RAG-Assistent, der auf Deutsch antwortet.",
             },
-            {
-                "role": "user",
-                "content": prompt
-            }
+            {"role": "user", "content": prompt},
         ],
-        temperature=0.2
+        temperature=0.2,
     )
-    
+
     answer = chat_response.choices[0].message.content
     return answer
+
 
 def extract_chunks_from_structured_json(structured_json):
     chunks = []
@@ -265,7 +257,7 @@ def extract_chunks_from_structured_json(structured_json):
         for sec in page.get("sections", []):
             title = sec.get("title", "")
             content = sec.get("content", "")
-            
+
             if content:
                 # Optional: Titel als Teil des Chunks
                 chunk_text = f"{title}\n{content}" if title else content
@@ -277,6 +269,7 @@ def extract_chunks_from_structured_json(structured_json):
         chunks.append(f"{key}: {val}")
 
     return chunks
+
 
 def ingest_structured_document(structured_json, source: str) -> int:
     chunks = extract_chunks_from_structured_json(structured_json)
@@ -290,11 +283,7 @@ def ingest_structured_document(structured_json, source: str) -> int:
     items = []
     for idx, (chunk_text, emb) in enumerate(zip(chunks, embeddings)):
         item_id = f"{source}_{idx}"
-        metadata = {
-            "source": source,
-            "chunk": idx,
-            "text": chunk_text
-        }
+        metadata = {"source": source, "chunk": idx, "text": chunk_text}
         items.append((item_id, emb, metadata))
 
     collection.upsert(items)
