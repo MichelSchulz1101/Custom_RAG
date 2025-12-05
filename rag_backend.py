@@ -3,7 +3,6 @@ import os
 import vecs
 from openai import OpenAI
 from typing import List
-import json
 
 # Variablen aus .env-Datei laden:
 load_dotenv()
@@ -98,48 +97,48 @@ def ingest_document(raw_text: str, source: str) -> int:
     Parameter:
         raw_text (str): Der komplette Text des Dokuments
         source (str): Eine Kennung für die Quelle z.B. Dateiname ("handbuch_v1)
-    """  
+    """
     # 1. Text in Chunks aufteilen:
     chunks = chunk_text(text=raw_text)
     if not chunks:
         return 0
     print(f"Anzahl Chunks: {len(chunks)}")
-
+    
     # 2. Embeddings für alle Chunks erzeugen:
     embeddings = embed_texts(texts=chunks)
-
+    
     # 3. Items für "vecs" vorbereiten:
     # - "vecs" erwartet eine Liste von Tupel: (id, embedding, metadata)
     items = []
     for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
         
-        # Eindeutige ID pro Chunk (z.B. "demo_doc_0", "demo_doc_1" ...)
+        # Eindeutige ID pro Chunk (z.B. "demo_doc_0", "demo_doc_1"...)
         item_id = f"{source}_{i}"
 
         # Metadaten als JSON-ähnliches Dictionary:
         # - source: Woher kommt der Text?
-        # - chunks: Laufende Nummer
+        # - chunk: Laufende Nummer
         # - text: Der eigentliche Text dieses Chunks
         metadata = {
             "source": source,
             "chunk": i,
             "text": chunk
         }
-
+        
         items.append(
             (item_id, emb, metadata)
         )
     print(f"Anzahl der Items für 'upsert': {len(items)}")
-
-    # 4. Allte Items in die Collection schreiben (upsert = insert oder update):
+    
+    # 4. Alle Items in die Collection schreiben (upsert = insert oder update):
     collection.upsert(items)
-
+    
     # 5. Index für schnellere Ähnlichkeitssuche erstellen:
     collection.create_index()
-
+    
     print(f"{len(items)} Chunks von '{source}' gespeichert.")
     return len(items)
-
+    
 
 def embed_query(query: str) -> List[float]:
     """
@@ -156,10 +155,10 @@ def embed_query(query: str) -> List[float]:
         model=EMBEDDING_MODEL,
         input=[query]
     )
-
+    
     return resp.data[0].embedding
 
-def search_similar_chunks(query: str, k: int = 3):
+def search_similar_chunks(query: str, k: int = 10):
     """
     Sucht die k ähnlichsten Chunks in der Collection für eine
     gegebene Nutzerfrage (query).
@@ -173,7 +172,7 @@ def search_similar_chunks(query: str, k: int = 3):
         (id, score, metadata)
     """
     query_vec = embed_query(query=query)
-    
+
     result = collection.query(
         data=query_vec,
         limit=k,
@@ -181,10 +180,10 @@ def search_similar_chunks(query: str, k: int = 3):
         include_metadata=True,
         include_value=True
     )
-
-    # Eine Liste von Tupel ausgeben:
+    
+    # Eine Liste von Tupel "(id, score, metadata)" ausgeben:
     return result
-
+    
 def build_rag_prompt(question: str, results: List[tuple]) -> str:
     """
     Erzeugt einen vollständigen Prompt für ein RAG-Chatmodell aus der Nutzerfrage und
@@ -218,7 +217,7 @@ def build_rag_prompt(question: str, results: List[tuple]) -> str:
     
     return prompt
 
-def answer_question_with_rag(question: str, k: int = 3) -> str:
+def answer_question_with_rag(question: str, k: int = 10) -> str:
     """
     Führt einen kompletten RAG-Druchlauf durch:
     - Ähnliche Chunks suchen
@@ -257,3 +256,48 @@ def answer_question_with_rag(question: str, k: int = 3) -> str:
     
     answer = chat_response.choices[0].message.content
     return answer
+
+def extract_chunks_from_structured_json(structured_json):
+    chunks = []
+
+    # 1. Jede Section als eigener Chunk
+    for page in structured_json.get("pages", []):
+        for sec in page.get("sections", []):
+            title = sec.get("title", "")
+            content = sec.get("content", "")
+            
+            if content:
+                # Optional: Titel als Teil des Chunks
+                chunk_text = f"{title}\n{content}" if title else content
+                chunks.append(chunk_text)
+
+    # 2. OPTIONAL: Key-Value-Pairs als Klartext
+    kv = structured_json.get("key_value_pairs", {})
+    for key, val in kv.items():
+        chunks.append(f"{key}: {val}")
+
+    return chunks
+
+def ingest_structured_document(structured_json, source: str) -> int:
+    chunks = extract_chunks_from_structured_json(structured_json)
+
+    if not chunks:
+        return 0
+
+    # Embeddings generieren
+    embeddings = embed_texts(chunks)
+
+    items = []
+    for idx, (chunk_text, emb) in enumerate(zip(chunks, embeddings)):
+        item_id = f"{source}_{idx}"
+        metadata = {
+            "source": source,
+            "chunk": idx,
+            "text": chunk_text
+        }
+        items.append((item_id, emb, metadata))
+
+    collection.upsert(items)
+    collection.create_index()
+
+    return len(items)

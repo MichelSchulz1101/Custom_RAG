@@ -1,6 +1,7 @@
 import streamlit as st
 import rag_backend
 from PyPDF2 import PdfReader
+import pdf_utils
 
 st.title("RAG-System")
 
@@ -8,10 +9,13 @@ st.title("RAG-System")
 with st.sidebar:
     st.header("Dokumente ingestieren")
     
-    source_name = st.text_input(
-        label="Quellen-Name:",
-        value="demo_doc"
-    )
+    uploaded_pdf = None
+    
+    if "source_name" not in st.session_state:
+        st.session_state["source_name"] = "demo_doc"
+    if "auto_source_name" not in st.session_state:
+        st.session_state["auto_source_name"] = None
+    
     
     # Wie sollen die Daten hinzugefügt werden?
     ingest_mode = st.radio(
@@ -28,6 +32,11 @@ with st.sidebar:
                 Wissensdatenbank soll...
             """
         )
+        
+        source_name = st.text_input(
+            label="Quellen-Name:",
+            key="source_name"
+        )
     
         if st.button("Ingest starten"):
             if not raw_text.strip():
@@ -41,29 +50,40 @@ with st.sidebar:
             label="PDF-Datei auswählen:",
             type=["pdf"]
         )
-        
+    
+        if uploaded_pdf is not None:
+            # Dateiname als Vorschlag verwenden:
+            filename = uploaded_pdf.name
+            dot_index = filename.rfind(".")
+            if dot_index != -1:
+                auto_source_name = filename[:dot_index]
+            else:
+                auto_source_name = filename
+
+            if st.session_state["source_name"] == "demo_doc":
+                st.session_state["source_name"] = auto_source_name
+            
+            st.info(f"Quellen-Name wird automatisch auf **'{st.session_state['source_name']}'** gesetzt.")
+            
+        source_name = st.text_input(
+            label="Quellen-Name:",
+            key="source_name"
+        )
+            
         if st.button("Ingest starten"):
             try:
                 # PDF einlesen und Text extrahieren:
-                reader = PdfReader(uploaded_pdf)
-                full_text = ""
-                for page in reader.pages:
-                    page_text = page.extract_text()
-                    if page_text:
-                        full_text += page_text + "\n"
-                
-                if not full_text.strip():
-                    st.error("Kein Text in der PDF gefunden!") 
-                else:
-                    num_chunks = rag_backend.ingest_document(
-                        raw_text=full_text,
-                        source=source_name
+                pdf_bytes = uploaded_pdf.read()
+                structured = pdf_utils.extract_text_with_ocr(pdf_bytes)
+                num_chunks = rag_backend.ingest_structured_document(
+                    structured_json=structured,
+                    source=source_name
                     )
-                    st.success(
-                        f"{num_chunks} Chunks aus PDF unter Quelle '{source_name}'"
-                        "gespeichert."
-                    )
-                          
+                st.success(
+                    f"{num_chunks} Chunks aus PDF unter Quelle '{st.session_state['source_name']}'"
+                    "gespeichert."
+                )
+                        
             except Exception as e:
                 st.error(f"Fehler beim Lesen der PDF: {e}")
         
