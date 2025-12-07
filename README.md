@@ -56,6 +56,33 @@ OPENAI_API_KEY=your_api_key_here
 SUPABASE_DB_URL=your_supabase_vector_url
 ```
 
+## DB Setup
+
+Create a new Supabase project
+Go to 👉 https://supabase.com
+ and create a new project.
+
+Enable the vecs extension
+In the Supabase Dashboard, open the SQL Editor and run:
+
+create extension if not exists vecs;
+
+
+Select / create the vecs schema
+Make sure the vecs schema exists and is selected:
+
+create schema if not exists vecs;
+
+
+Create the rag_docs table
+This table stores document embeddings and metadata used for the RAG pipeline:
+
+create table vecs.rag_docs (
+  id varchar primary key,
+  vec vector(1536),
+  metadata jsonb
+);
+
 ## Run the Application
 
 ```bash
