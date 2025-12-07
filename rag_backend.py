@@ -19,7 +19,7 @@ if not SUPABASE_DB_URL:
 
 # Modellnamen:
 EMBEDDING_MODEL = "text-embedding-3-small"
-CHAT_MODEL = "gpt-4.1-mini"
+CHAT_MODEL = "gpt-4o-mini"
 
 # Name der Collection = Eine logische Gruppe von Vektoren (z.B. alle Embeddings der Dokumente):
 COLLECTION_NAME = "rag_docs"
@@ -259,14 +259,22 @@ def extract_chunks_from_structured_json(structured_json):
             content = sec.get("content", "")
 
             if content:
+                # Ensure content is a string
+                if isinstance(content, list):
+                    content = "\n".join([str(c) for c in content])
+                else:
+                    content = str(content)
+
                 # Optional: Titel als Teil des Chunks
                 chunk_text = f"{title}\n{content}" if title else content
-                chunks.append(chunk_text)
+                if chunk_text.strip():  # Only add non-empty chunks
+                    chunks.append(chunk_text)
 
     # 2. OPTIONAL: Key-Value-Pairs als Klartext
     kv = structured_json.get("key_value_pairs", {})
     for key, val in kv.items():
-        chunks.append(f"{key}: {val}")
+        if val:
+            chunks.append(f"{key}: {val}")
 
     return chunks
 
