@@ -21,7 +21,7 @@ CUSTOM_RAG/
 - OpenAI API
 - Supabase Vector Store
 - PyPDF2
-- OCR Engine (EasyOCR or PaddleOCR)
+- OCR Engine (Docling)
 - vecs
 - NumPy
 
@@ -47,10 +47,6 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-- Note:
-On macOS, PaddleOCR may crash due to native dependencies.
-If so, use EasyOCR as an alternative.
-
 ## Environment Setup
 
 Create a `.env` file inside the project folder:
@@ -74,5 +70,5 @@ After starting, open:
 - Page-level metadata storage
 - Support ingestion of multiple PDFs grouped by source
 - Preview of extracted text
-- Parallel OCR processing
+- Docling OCR processing
 - Exporting structured document JSON
