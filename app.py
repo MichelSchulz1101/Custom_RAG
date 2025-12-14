@@ -1,12 +1,22 @@
 import streamlit as st
 import rag_backend
-from PyPDF2 import PdfReader
 import pdf_utils
 
 st.title("RAG-System")
 
-# --- Sidebar: Dokument ingestieren --- #
+# --- Sidebar: Konfiguration --- #
 with st.sidebar:
+    st.header("Konfiguration")
+
+    # Auswahl des Providers (OpenAI oder Lokal)
+    provider = st.selectbox(
+        "KI-Modell Provider:",
+        options=["Local (Ollama)", "OpenAI"],
+        index=0,
+        help="Wähle 'Local' für Datenschutz (Ollama) oder 'OpenAI' für bessere Qualität (Cloud).",
+    )
+
+    st.divider()
     st.header("Dokumente ingestieren")
 
     uploaded_pdf = None
@@ -38,9 +48,11 @@ with st.sidebar:
             if not raw_text.strip():
                 st.warning("Bitte zuerst Dokument-Text eingeben!")
             else:
-                num_chunks = rag_backend.ingest_document(raw_text, source_name)
+                num_chunks = rag_backend.ingest_document(
+                    raw_text, source_name, provider=provider
+                )
                 st.success(
-                    f"{num_chunks} Chunks unter Quelle '{source_name}' gespeichert."
+                    f"{num_chunks} Chunks unter Quelle '{source_name}' gespeichert ({provider})."
                 )
 
     else:
@@ -68,13 +80,13 @@ with st.sidebar:
             try:
                 # PDF einlesen und Text extrahieren:
                 pdf_bytes = uploaded_pdf.read()
-                structured = pdf_utils.extract_text_with_ocr(pdf_bytes)
+                structured = pdf_utils.extract_text_with_ocr(pdf_bytes, provider=provider)
                 num_chunks = rag_backend.ingest_structured_document(
-                    structured_json=structured, source=source_name
+                    structured_json=structured, source=source_name, provider=provider
                 )
                 st.success(
                     f"{num_chunks} Chunks aus PDF unter Quelle '{st.session_state['source_name']}'"
-                    "gespeichert."
+                    f" gespeichert ({provider})."
                 )
 
             except Exception as e:
@@ -111,9 +123,11 @@ if user_input:
 
     # RAG-Antwort anzeigen:
     with st.chat_message(name="assistant"):
-        with st.spinner("Denke nach..."):
+        with st.spinner(f"Denke nach ({provider})..."):
             try:
-                answer = rag_backend.answer_question_with_rag(question=user_input)
+                answer = rag_backend.answer_question_with_rag(
+                    question=user_input, provider=provider
+                )
             except Exception as e:
                 answer = f"Es ist ein Fehler aufgetreten: {e}"
 

@@ -1,45 +1,22 @@
 """
-Dieses Modul kombiniert:
-- PyPDF2 für normale Texte
-- Docling für eingescannten Text und komplexe PDFs
+Dieses Modul kümmert sich um das Einlesen und Strukturieren von PDFs.
+Es nutzt 'Docling' für OCR und Layout-Erkennung.
 """
 
-from PyPDF2 import PdfReader
-import io
 import os
 import json
 import re
 import tempfile
-from dotenv import load_dotenv
-from openai import OpenAI
 from docling.document_converter import DocumentConverter
+import rag_backend
 
 
-def extract_text_with_pypdf2(pdf_file) -> list[str]:
+def extract_text_with_ocr(pdf_bytes: bytes, provider: str = "Local (Ollama)", lang="de"):
     """
-    Extrahiert Text pro Seite mit PyPDF2 und gibt eine
-    Liste zurück. Jeder Eintrag entspricht einer Seite.
+    Nutzt Docling, um Text aus dem PDF zu extrahieren (auch gescannt).
+    Danach wird der Text mit einem LLM strukturiert.
     """
-
-    reader = PdfReader(pdf_file)
-    pages = []
-
-    for page in reader.pages:
-        text = page.extract_text()
-        if text is None:
-            pages.append("")
-        else:
-            pages.append(text.strip())
-
-    return pages
-
-
-def extract_text_with_ocr(pdf_bytes: bytes, lang="de"):
-    """
-    Uses Docling to extract text from the PDF (including scanned parts).
-    Then structures the text using OpenAI.
-    """
-    # Save bytes to a temporary file because Docling expects a path or URL
+    # Temporäre Datei erstellen, da Docling einen Dateipfad benötigt
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
         tmp_file.write(pdf_bytes)
         tmp_path = tmp_file.name
@@ -49,15 +26,16 @@ def extract_text_with_ocr(pdf_bytes: bytes, lang="de"):
         result = converter.convert(tmp_path)
         doc = result.document
     finally:
-        # Clean up temp file
+        # Aufräumen: Temporäre Datei löschen
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-    # Extract text per page
-    page_texts = {}  # page_no -> list of strings
+    # Text pro Seite sammeln
+    page_texts = {}  # Seite -> Liste von Texten
 
     def traverse(item):
-        # If item has children, traverse them
+        """Rekursive Funktion, um durch die Dokumenten-Struktur zu gehen."""
+        # Wenn das Element Kinder hat, gehe tiefer
         if hasattr(item, "children") and item.children:
             for child in item.children:
                 if hasattr(child, "resolve"):
@@ -65,9 +43,9 @@ def extract_text_with_ocr(pdf_bytes: bytes, lang="de"):
                     traverse(resolved)
                 else:
                     traverse(child)
-            return  # Don't process the group itself as text if we processed children
+            return
 
-        # Leaf item (or item without children we care about)
+        # Text-Inhalt extrahieren
         text_content = ""
         if hasattr(item, "export_to_markdown"):
             try:
@@ -78,8 +56,8 @@ def extract_text_with_ocr(pdf_bytes: bytes, lang="de"):
         elif hasattr(item, "text"):
             text_content = item.text
 
+        # Wenn Text gefunden wurde, der Seite zuordnen
         if text_content and hasattr(item, "prov") and item.prov:
-            # prov is a list of ProvenanceItem
             page_no = item.prov[0].page_no
             if page_no not in page_texts:
                 page_texts[page_no] = []
@@ -89,6 +67,7 @@ def extract_text_with_ocr(pdf_bytes: bytes, lang="de"):
 
             page_texts[page_no].append(str(text_content))
 
+    # Start der Rekursion
     traverse(doc.body)
 
     structured_pages = []
@@ -99,7 +78,7 @@ def extract_text_with_ocr(pdf_bytes: bytes, lang="de"):
         page_text = "\n".join(page_texts[page_number])
 
         # Strukturierung der OCR-Ausgabe:
-        structured = structure_document(text=page_text)
+        structured = structure_document(text=page_text, provider=provider)
         structured["page_number"] = page_number  # page_number is 1-based from docling
         structured_pages.append(structured)
 
@@ -119,71 +98,83 @@ def extract_text_with_ocr(pdf_bytes: bytes, lang="de"):
     return {"pages": structured_pages, "merged_text": full_text}
 
 
-def structure_document(text):
-    prompt = f"""
+import rag_backend
+
+
+def structure_document(text, provider="Local (Ollama)"):
+    if not text or not text.strip():
+        return {
+            "document_type": "unknown",
+            "title": "",
+            "sections": [],
+            "tables": [],
+            "entities": {
+                "dates": [],
+                "names": [],
+                "locations": [],
+                "organizations": [],
+                "amounts": [],
+            },
+            "key_value_pairs": {},
+        }
+
+    system_prompt = """
         You are a document structuring system.
-        The content is an arbitrary OCR document. 
-        Your job is to convert it into a universal JSON format
-        that works for ANY document type (letters, contracts, invoices, articles, etc.)
-        without assuming a fixed schema.
-
+        Your job is to convert OCR text into a universal JSON format.
         The JSON MUST contain ONLY these top-level keys:
-
-        {{
-        "document_type": "",
-        "title": "",
-        "sections": [],
+        {
+        "document_type": "string",
+        "title": "string",
+        "sections": [{"title": "string", "content": "string"}],
         "tables": [],
-        "entities": {{
+        "entities": {
             "dates": [],
             "names": [],
             "locations": [],
             "organizations": [],
             "amounts": []
-        }},
-        "key_value_pairs": {{}}
-        }}
+        },
+        "key_value_pairs": {}
+        }
+        Return ONLY valid JSON.
+    """
 
-        Rules:
-        - Detect the document type heuristically. Examples include: invoice, receipt, contract, legal letter, academic article, form, notice, report, business letter, manual, etc. 
-        Do NOT force any specific type. If uncertain, use "unknown".
-        - Split text into logical sections by meaning.
-        - Extract entities (NER-like).
-        - If text includes something like 'X: Y', treat as key-value pair.
-        - If a table-like structure exists, convert it into rows and columns.
-        - Preserve original content.
-
+    user_prompt = f"""
+        Analyze the following text and structure it according to the rules.
+        
         OCR TEXT:
         {text}
     """
 
-    # Variablen aus .env-Datei laden:
-    load_dotenv()
+    # Client und Config holen:
+    client = rag_backend.get_client(provider)
+    config = rag_backend.get_config(provider)
 
-    # Wichtige Konfigurationswerte:
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    try:
+        response = client.chat.completions.create(
+            model=config["chat_model"],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+        )
 
-    # Fehler ausgeben, falls wichtige Werte fehlen:
-    if not OPENAI_API_KEY:
-        raise ValueError("OPENAI_API_KEY ist nicht gesetzt (.env-Datei prüfen)!")
+        content = response.choices[0].message.content
+        return safe_extract_json(content)
 
-    # Modellnamen:
-    CHAT_MODEL = "gpt-4o-mini"
-
-    client = OpenAI(api_key=OPENAI_API_KEY)
-
-    response = client.chat.completions.create(
-        model=CHAT_MODEL,
-        messages=[
-            {"role": "user", "content": prompt},
-            {
-                "role": "system",
-                "content": "Return ONLY valid JSON without explanation, markdown or comments.",
-            },
-        ],
-    )
-
-    return safe_extract_json(response.choices[0].message.content)
+    except Exception as e:
+        print(f"Error in structure_document: {e}")
+        # Fallback: Return unstructured text as one section
+        return {
+            "document_type": "unknown",
+            "title": "Error processing",
+            "sections": [{"title": "Raw Text", "content": text}],
+            "tables": [],
+            "entities": {},
+            "key_value_pairs": {},
+        }
 
 
 def safe_extract_json(text):
@@ -205,13 +196,3 @@ def safe_extract_json(text):
         return json.loads(json_str)
     except Exception as e:
         raise ValueError(f"JSON war nicht parsebar:\n{json_str}") from e
-
-
-# Für Testzwecke:
-if __name__ == "__main__":
-    # with open("rezept_test.pdf", "rb") as file:
-    #     text = extract_text_with_ocr(pdf_bytes=file.read())
-    #     print(text)
-
-    text = extract_text_with_pypdf2("rezept_test.pdf")
-    print(text)

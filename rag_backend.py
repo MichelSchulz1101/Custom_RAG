@@ -8,48 +8,68 @@ from typing import List
 load_dotenv()
 
 # Wichtige Konfigurationswerte:
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 
 # Fehler ausgeben, falls wichtige Werte fehlen:
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY ist nicht gesetzt (.env-Datei prüfen)!")
 if not SUPABASE_DB_URL:
     raise ValueError("SUPABASE_DB_URL ist nicht gesetzt (.env-Datei prüfen)!")
 
-# Modellnamen:
-EMBEDDING_MODEL = "text-embedding-3-small"
-CHAT_MODEL = "gpt-4o-mini"
+# Configs für die verschiedenen KI-Provider
+PROVIDERS = {
+    "OpenAI": {
+        "embedding_model": "text-embedding-3-small",
+        "chat_model": "gpt-4o-mini",
+        "collection_name": "rag_docs",
+        "dimension": 1536,
+        "base_url": None,
+        "api_key_env": "OPENAI_API_KEY",
+    },
+    "Local (Ollama)": {
+        "embedding_model": "nomic-embed-text",
+        "chat_model": "llama3.1",
+        "collection_name": "rag_docs_local",
+        "dimension": 768,
+        "base_url": "http://localhost:11434/v1",
+        "api_key": "ollama",
+    },
+}
 
-# Name der Collection = Eine logische Gruppe von Vektoren (z.B. alle Embeddings der Dokumente):
-COLLECTION_NAME = "rag_docs"
 
-# OpenAI-Client, über den wir Embeddings anfragen (auch Chat möglich):
-client = OpenAI(api_key=OPENAI_API_KEY)
+def get_config(provider):
+    return PROVIDERS.get(provider, PROVIDERS["Local (Ollama)"])
 
-# Einsteigspunkt für die Verbindung zur Supabase-Datenbank:
+
+def get_client(provider):
+    config = get_config(provider)
+    if provider == "OpenAI":
+        api_key = os.getenv(config["api_key_env"])
+        if not api_key:
+            raise ValueError(f"{config['api_key_env']} not set")
+        return OpenAI(api_key=api_key)
+    else:
+        return OpenAI(base_url=config["base_url"], api_key=config["api_key"])
+
+
+def get_collection(provider):
+    config = get_config(provider)
+    return vx.get_or_create_collection(
+        name=config["collection_name"], dimension=config["dimension"]
+    )
+
+
+# Einstiegspunkt für die Verbindung zur Supabase-Datenbank:
+# Wir erzwingen SSL für eine sichere Verbindung
+if "?" not in SUPABASE_DB_URL:
+    SUPABASE_DB_URL += "?sslmode=require"
+elif "sslmode" not in SUPABASE_DB_URL:
+    SUPABASE_DB_URL += "&sslmode=require"
+
 vx = vecs.create_client(SUPABASE_DB_URL)
-
-# Collection erstellen oder holen:
-# - existiert sie schon, wird sie nur "geöffnet"
-# - existiert sie noch nicht, wird sie mit dieser Dimension angelegt:
-collection = vx.get_or_create_collection(
-    name=COLLECTION_NAME,
-    dimension=1536,  # Muss zur Dimensionalität des Embedding-Modells passen
-)
 
 
 def chunk_text(text: str, max_chars: int = 1000) -> List[str]:
     """
-    Teilt einen langen Text in kleinere Textstücke (Chunks),
-    damit wir pro Chunk ein Embedding erstellen können.
-
-    Parameter:
-        text (str): Gesamter Eingabetext (z.B. ein ganzer Artikel oder ein Kapitel)
-        max_chars_int (int, optional): Maximale Anzahl an Zeichen pro Chunk
-
-    Rückgabe:
-        Liste von von Text-Chunks (Strings)
+    Teilt einen langen Text in kleinere Stücke (Chunks).
     """
     chunks = []
     current = []
@@ -73,23 +93,27 @@ def chunk_text(text: str, max_chars: int = 1000) -> List[str]:
     return chunks
 
 
-def embed_texts(texts: List[str]) -> List[List[float]]:
+def embed_texts(texts: List[str], provider: str) -> List[List[float]]:
     """
     Erzeugt Embeddings für eine Liste von Texten.
 
     Parameter:
         texts (List[str]): Liste von Strings (Text-Chunks)
+        provider (str): "OpenAI" oder "Local (Ollama)"
 
     Returns:
         List[List[float]]: Liste von Embeddins (jede Embedding ist eine Liste von floats)
     """
-    response = client.embeddings.create(input=texts, model=EMBEDDING_MODEL)
+    client = get_client(provider)
+    config = get_config(provider)
+
+    response = client.embeddings.create(input=texts, model=config["embedding_model"])
 
     # "response.data" ist eine Liste von Objekten, die jeweils ein Embedding enthalten:
     return [data.embedding for data in response.data]
 
 
-def ingest_document(raw_text: str, source: str) -> int:
+def ingest_document(raw_text: str, source: str, provider: str) -> int:
     """
     Nimmt einen Rohtext, zerteilt ihn in Chunks, erstellt Embeddings
     und speichert alles in der Supabase-Collection.
@@ -97,6 +121,7 @@ def ingest_document(raw_text: str, source: str) -> int:
     Parameter:
         raw_text (str): Der komplette Text des Dokuments
         source (str): Eine Kennung für die Quelle z.B. Dateiname ("handbuch_v1)
+        provider (str): "OpenAI" oder "Local (Ollama)"
     """
     # 1. Text in Chunks aufteilen:
     chunks = chunk_text(text=raw_text)
@@ -105,7 +130,7 @@ def ingest_document(raw_text: str, source: str) -> int:
     print(f"Anzahl Chunks: {len(chunks)}")
 
     # 2. Embeddings für alle Chunks erzeugen:
-    embeddings = embed_texts(texts=chunks)
+    embeddings = embed_texts(texts=chunks, provider=provider)
 
     # 3. Items für "vecs" vorbereiten:
     # - "vecs" erwartet eine Liste von Tupel: (id, embedding, metadata)
@@ -125,6 +150,7 @@ def ingest_document(raw_text: str, source: str) -> int:
     print(f"Anzahl der Items für 'upsert': {len(items)}")
 
     # 4. Alle Items in die Collection schreiben (upsert = insert oder update):
+    collection = get_collection(provider)
     collection.upsert(items)
 
     # 5. Index für schnellere Ähnlichkeitssuche erstellen:
@@ -134,36 +160,43 @@ def ingest_document(raw_text: str, source: str) -> int:
     return len(items)
 
 
-def embed_query(query: str) -> List[float]:
+def embed_query(query: str, provider: str) -> List[float]:
     """
     Erzeugt ein einzelnes Embedding für eine Nutzerfrage (Query).
     Nutzt dasselbe Embedding-Modell wie beim Ingest.
 
     Parameter:
         query (str): Die Nutzerfrage z.B. "Wie groß ist der Durchmesser der Sonne?"
+        provider (str): "OpenAI" oder "Local (Ollama)"
 
     Returns:
         List[float]: Ein Embedding
     """
-    resp = client.embeddings.create(model=EMBEDDING_MODEL, input=[query])
+    client = get_client(provider)
+    config = get_config(provider)
+
+    resp = client.embeddings.create(model=config["embedding_model"], input=[query])
 
     return resp.data[0].embedding
 
 
-def search_similar_chunks(query: str, k: int = 10):
+def search_similar_chunks(query: str, provider: str, k: int = 10):
     """
     Sucht die k ähnlichsten Chunks in der Collection für eine
     gegebene Nutzerfrage (query).
 
     Parameter:
         query (str): Die Nutzerfrage
+        provider (str): "OpenAI" oder "Local (Ollama)"
         k (int, optional): Anzahl der ähnlichsten Chunks
 
     Rückgabe:
         Liste von Treffern, wobei jeder Treffer ein Tupel ist:
         (id, score, metadata)
     """
-    query_vec = embed_query(query=query)
+    query_vec = embed_query(query=query, provider=provider)
+
+    collection = get_collection(provider)
 
     result = collection.query(
         data=query_vec,
@@ -211,7 +244,7 @@ def build_rag_prompt(question: str, results: List[tuple]) -> str:
     return prompt
 
 
-def answer_question_with_rag(question: str, k: int = 10) -> str:
+def answer_question_with_rag(question: str, provider: str, k: int = 10) -> str:
     """
     Führt einen kompletten RAG-Druchlauf durch:
     - Ähnliche Chunks suchen
@@ -221,20 +254,24 @@ def answer_question_with_rag(question: str, k: int = 10) -> str:
 
     Parameter:
         question (str): Die Ausgangsfrage der Nutzers
+        provider (str): "OpenAI" oder "Local (Ollama)"
         k (int, optional): k ähnliche Chunks
 
     Returns:
         str: Endgültige Antwort auf die Ausgangsfrage der Nutzers
     """
     # 1. Kontext-Chunks zur Frage suchen:
-    results = search_similar_chunks(query=question, k=k)
+    results = search_similar_chunks(query=question, provider=provider, k=k)
 
     # 2. Prompt aus Frage + Kontext bauen:
     prompt = build_rag_prompt(question=question, results=results)
 
     # 3. Chat-Modell aufgrufen (LLM):
+    client = get_client(provider)
+    config = get_config(provider)
+
     chat_response = client.chat.completions.create(
-        model=CHAT_MODEL,
+        model=config["chat_model"],
         messages=[
             {
                 "role": "system",
@@ -279,14 +316,14 @@ def extract_chunks_from_structured_json(structured_json):
     return chunks
 
 
-def ingest_structured_document(structured_json, source: str) -> int:
+def ingest_structured_document(structured_json, source: str, provider: str) -> int:
     chunks = extract_chunks_from_structured_json(structured_json)
 
     if not chunks:
         return 0
 
     # Embeddings generieren
-    embeddings = embed_texts(chunks)
+    embeddings = embed_texts(chunks, provider=provider)
 
     items = []
     for idx, (chunk_text, emb) in enumerate(zip(chunks, embeddings)):
@@ -294,6 +331,7 @@ def ingest_structured_document(structured_json, source: str) -> int:
         metadata = {"source": source, "chunk": idx, "text": chunk_text}
         items.append((item_id, emb, metadata))
 
+    collection = get_collection(provider)
     collection.upsert(items)
     collection.create_index()
 
