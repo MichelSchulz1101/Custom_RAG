@@ -66,7 +66,7 @@ elif "sslmode" not in SUPABASE_DB_URL:
 
 vx = vecs.create_client(SUPABASE_DB_URL)
 
-
+# Helper
 def chunk_text(text: str, max_chars: int = 1000) -> List[str]:
     """
     Teilt einen langen Text in kleinere Stücke (Chunks).
@@ -77,7 +77,7 @@ def chunk_text(text: str, max_chars: int = 1000) -> List[str]:
 
     # Wir trennen grob nach Zeilenumbrüchen:
     for symbol in text.split("\n"):
-        # Wenn der akteulle Chunk zu große werden würde, speichern wir ihn ab:
+        # Wenn der aktuelle Chunk zu groß werden würde, speichern wir ihn ab:
         if current_len + len(symbol) > max_chars and current:
             chunks.append("\n".join(current))
             current = []
@@ -92,17 +92,10 @@ def chunk_text(text: str, max_chars: int = 1000) -> List[str]:
 
     return chunks
 
-
+# Helper
 def embed_texts(texts: List[str], provider: str) -> List[List[float]]:
     """
     Erzeugt Embeddings für eine Liste von Texten.
-
-    Parameter:
-        texts (List[str]): Liste von Strings (Text-Chunks)
-        provider (str): "OpenAI" oder "Local (Ollama)"
-
-    Returns:
-        List[List[float]]: Liste von Embeddins (jede Embedding ist eine Liste von floats)
     """
     client = get_client(provider)
     config = get_config(provider)
@@ -117,11 +110,6 @@ def ingest_document(raw_text: str, source: str, provider: str) -> int:
     """
     Nimmt einen Rohtext, zerteilt ihn in Chunks, erstellt Embeddings
     und speichert alles in der Supabase-Collection.
-
-    Parameter:
-        raw_text (str): Der komplette Text des Dokuments
-        source (str): Eine Kennung für die Quelle z.B. Dateiname ("handbuch_v1)
-        provider (str): "OpenAI" oder "Local (Ollama)"
     """
     # 1. Text in Chunks aufteilen:
     chunks = chunk_text(text=raw_text)
@@ -133,23 +121,15 @@ def ingest_document(raw_text: str, source: str, provider: str) -> int:
     embeddings = embed_texts(texts=chunks, provider=provider)
 
     # 3. Items für "vecs" vorbereiten:
-    # - "vecs" erwartet eine Liste von Tupel: (id, embedding, metadata)
     items = []
     for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
-
-        # Eindeutige ID pro Chunk (z.B. "demo_doc_0", "demo_doc_1"...)
         item_id = f"{source}_{i}"
-
-        # Metadaten als JSON-ähnliches Dictionary:
-        # - source: Woher kommt der Text?
-        # - chunk: Laufende Nummer
-        # - text: Der eigentliche Text dieses Chunks
         metadata = {"source": source, "chunk": i, "text": chunk}
-
         items.append((item_id, emb, metadata))
+
     print(f"Anzahl der Items für 'upsert': {len(items)}")
 
-    # 4. Alle Items in die Collection schreiben (upsert = insert oder update):
+    # 4. Alle Items in die Collection schreiben:
     collection = get_collection(provider)
     collection.upsert(items)
 
@@ -163,14 +143,6 @@ def ingest_document(raw_text: str, source: str, provider: str) -> int:
 def embed_query(query: str, provider: str) -> List[float]:
     """
     Erzeugt ein einzelnes Embedding für eine Nutzerfrage (Query).
-    Nutzt dasselbe Embedding-Modell wie beim Ingest.
-
-    Parameter:
-        query (str): Die Nutzerfrage z.B. "Wie groß ist der Durchmesser der Sonne?"
-        provider (str): "OpenAI" oder "Local (Ollama)"
-
-    Returns:
-        List[float]: Ein Embedding
     """
     client = get_client(provider)
     config = get_config(provider)
@@ -179,20 +151,11 @@ def embed_query(query: str, provider: str) -> List[float]:
 
     return resp.data[0].embedding
 
-
+# Helper
 def search_similar_chunks(query: str, provider: str, k: int = 10):
     """
     Sucht die k ähnlichsten Chunks in der Collection für eine
     gegebene Nutzerfrage (query).
-
-    Parameter:
-        query (str): Die Nutzerfrage
-        provider (str): "OpenAI" oder "Local (Ollama)"
-        k (int, optional): Anzahl der ähnlichsten Chunks
-
-    Rückgabe:
-        Liste von Treffern, wobei jeder Treffer ein Tupel ist:
-        (id, score, metadata)
     """
     query_vec = embed_query(query=query, provider=provider)
 
@@ -206,22 +169,12 @@ def search_similar_chunks(query: str, provider: str, k: int = 10):
         include_value=True,
     )
 
-    # Eine Liste von Tupel "(id, score, metadata)" ausgeben:
     return result
 
-
+# Helper
 def build_rag_prompt(question: str, results: List[tuple]) -> str:
     """
-    Erzeugt einen vollständigen Prompt für ein RAG-Chatmodell aus der Nutzerfrage und
-    den zuvor gefunden Kontext-Chunks.
-
-    Parameter:
-        question (str): Die ursprüngliche Nutzerfrage
-        results (List[tuple]): Trefferliste der semantischen Suche. JEder Eintrag ist ein Tupel:
-        (id, score, metadata)
-
-    Returns:
-        str: Ein fertig zusammengesetzter Prompt, der in einer Chat-Anfrage verwendet werden kann.
+    Erzeugt einen vollständigen Prompt für ein RAG-Chatmodell.
     """
     kontexte = []
     for vec_id, score, metadata in results:
@@ -232,7 +185,7 @@ def build_rag_prompt(question: str, results: List[tuple]) -> str:
     prompt = f"""
         ## Allgemein:
         Du bist ein hilfreicher Assistent. Beantworte die Frage ausschließlich mit Hilfe
-        des bereitgestellten Kontextes. Wenn die Frage im Kontext nicht klar steht, sage erlich, dass du es nicht weißt.
+        des bereitgestellten Kontextes. Wenn die Frage im Kontext nicht klar steht, sage ehrlich, dass du es nicht weißt.
         
         ## Frage:
         {question}
@@ -246,19 +199,7 @@ def build_rag_prompt(question: str, results: List[tuple]) -> str:
 
 def answer_question_with_rag(question: str, provider: str, k: int = 10) -> str:
     """
-    Führt einen kompletten RAG-Druchlauf durch:
-    - Ähnliche Chunks suchen
-    - Prompt bauen
-    - Chat-Modell aufrufen
-    - Antwort als String ausgeben
-
-    Parameter:
-        question (str): Die Ausgangsfrage der Nutzers
-        provider (str): "OpenAI" oder "Local (Ollama)"
-        k (int, optional): k ähnliche Chunks
-
-    Returns:
-        str: Endgültige Antwort auf die Ausgangsfrage der Nutzers
+    Führt einen kompletten RAG-Durchlauf durch.
     """
     # 1. Kontext-Chunks zur Frage suchen:
     results = search_similar_chunks(query=question, provider=provider, k=k)
@@ -266,7 +207,7 @@ def answer_question_with_rag(question: str, provider: str, k: int = 10) -> str:
     # 2. Prompt aus Frage + Kontext bauen:
     prompt = build_rag_prompt(question=question, results=results)
 
-    # 3. Chat-Modell aufgrufen (LLM):
+    # 3. Chat-Modell aufrufen (LLM):
     client = get_client(provider)
     config = get_config(provider)
 
@@ -285,8 +226,11 @@ def answer_question_with_rag(question: str, provider: str, k: int = 10) -> str:
     answer = chat_response.choices[0].message.content
     return answer
 
-
+# Helper
 def extract_chunks_from_structured_json(structured_json):
+    """
+    Für chunks aus PDF
+    """
     chunks = []
 
     # 1. Jede Section als eigener Chunk
@@ -296,18 +240,18 @@ def extract_chunks_from_structured_json(structured_json):
             content = sec.get("content", "")
 
             if content:
-                # Ensure content is a string
+                # content immer zum Sting machen
                 if isinstance(content, list):
                     content = "\n".join([str(c) for c in content])
                 else:
                     content = str(content)
 
-                # Optional: Titel als Teil des Chunks
+                # Titel als Teil des Chunks
                 chunk_text = f"{title}\n{content}" if title else content
                 if chunk_text.strip():  # Only add non-empty chunks
                     chunks.append(chunk_text)
 
-    # 2. OPTIONAL: Key-Value-Pairs als Klartext
+    # Key-Value-Pairs als Klartext
     kv = structured_json.get("key_value_pairs", {})
     for key, val in kv.items():
         if val:

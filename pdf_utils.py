@@ -79,7 +79,7 @@ def extract_text_with_ocr(pdf_bytes: bytes, provider: str = "Local (Ollama)", la
 
         # Strukturierung der OCR-Ausgabe:
         structured = structure_document(text=page_text, provider=provider)
-        structured["page_number"] = page_number  # page_number is 1-based from docling
+        structured["page_number"] = page_number  
         structured_pages.append(structured)
 
     # Ganzes Dokument zusammenführen:
@@ -97,8 +97,6 @@ def extract_text_with_ocr(pdf_bytes: bytes, provider: str = "Local (Ollama)", la
 
     return {"pages": structured_pages, "merged_text": full_text}
 
-
-import rag_backend
 
 
 def structure_document(text, provider="Local (Ollama)"):
