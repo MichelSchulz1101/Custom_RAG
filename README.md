@@ -1,29 +1,35 @@
-## RAG System with OCR Support
+# Hybrid RAG System (OpenAI + Ollama)
 
-This project is a simple Retrieval-Augmented Generation (RAG) system that ingests documents and answers questions based on their content.
-PDF documents are processed, text is extracted (OCR is used when text cannot be read), and chunks are stored in a vector database.
+This project is a robust Retrieval-Augmented Generation (RAG) system that supports both cloud-based (OpenAI) and local (Ollama) AI models. It ingests PDF documents, extracts text and structure using **Docling**, and enables Q&A based on the document content.
+
+## Features
+
+- **Hybrid AI Support**: Switch seamlessly between OpenAI (`gpt-4o-mini`) and Local Ollama (`llama3.1`) models.
+- **Advanced PDF Processing**: Uses **Docling** for high-quality OCR and layout analysis.
+- **Structured Data Extraction**: Converts unstructured PDF text into structured JSON format.
+- **Vector Search**: Uses **Supabase (pgvector)** for storing and retrieving document embeddings.
+- **Interactive UI**: Built with **Streamlit** for easy document upload and chatting.
 
 ## Project Structure
 
 ```bash
 CUSTOM_RAG/
-│── app.py                 # Streamlit UI
-│── pdf_utils.py           # Text extraction + OCR + structuring
-│── rag_backend.py         # Chunks, embeddings, querying, RAG logic
-│── .env                   # API keys (not versioned)
-│── requirements.txt       # Dependencies
-└── README.md
+│── app.py                 # Streamlit UI (Frontend)
+│── pdf_utils.py           # PDF processing with Docling & JSON structuring
+│── rag_backend.py         # RAG logic, Embeddings, DB connection
+│── .env                   # API keys & Config (not versioned)
+│── requirements.txt       # Python Dependencies
+└── README.md              # Documentation
 ```
 
 ## Technologies Used
-- Python
-- Streamlit
-- OpenAI API
-- Supabase Vector Store
-- PyPDF2
-- OCR Engine (Docling)
-- vecs
-- NumPy
+
+- **Python 3.11+**
+- **Streamlit** (Frontend)
+- **Docling** (PDF/OCR Processing)
+- **Supabase / pgvector** (Vector Database)
+- **OpenAI API** (Cloud LLM & Embeddings)
+- **Ollama** (Local LLM & Embeddings)
 
 ## Installation
 
@@ -47,41 +53,39 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### 4. Install & Configure Ollama (For Local Mode)
+
+1. Download and install [Ollama](https://ollama.com/).
+2. Pull the required models:
+
+```bash
+ollama pull llama3.1
+ollama pull nomic-embed-text
+```
+
 ## Environment Setup
 
 Create a `.env` file inside the project folder:
 
 ```bash
-OPENAI_API_KEY=your_api_key_here
-SUPABASE_DB_URL=your_supabase_vector_url
+OPENAI_API_KEY=your_openai_api_key
+SUPABASE_DB_URL=postgresql://postgres:password@db.project.supabase.co:5432/postgres
 ```
 
-## DB Setup
+## Database Setup (Supabase)
 
-Create a new Supabase project
-Go to 👉 https://supabase.com
- and create a new project.
+1. **Create a Supabase Project**: Go to [database.new](https://database.new).
+2. **Enable Vector Extension**: Run this in the Supabase SQL Editor:
 
-Enable the vecs extension
-In the Supabase Dashboard, open the SQL Editor and run:
-
+```sql
 create extension if not exists vecs;
-
-
-Select / create the vecs schema
-Make sure the vecs schema exists and is selected:
-
 create schema if not exists vecs;
+```
 
-
-Create the rag_docs table
-This table stores document embeddings and metadata used for the RAG pipeline:
-
-create table vecs.rag_docs (
-  id varchar primary key,
-  vec vector(1536),
-  metadata jsonb
-);
+3. **Create Collections**:
+   The application automatically manages collections via the `vecs` python client, but you can manually verify them.
+   - `rag_docs`: For OpenAI embeddings (1536 dimensions).
+   - `rag_docs_local`: For Ollama embeddings (768 dimensions).
 
 ## Run the Application
 
@@ -89,13 +93,12 @@ create table vecs.rag_docs (
 streamlit run app.py
 ```
 
-After starting, open:
-- http://localhost:8501
+After starting, open your browser at: `http://localhost:8501`
 
-## Possible Improvements
+## Usage
 
-- Page-level metadata storage
-- Support ingestion of multiple PDFs grouped by source
-- Preview of extracted text
-- Docling OCR processing
+1. **Select Provider**: Choose "OpenAI" or "Local (Ollama)" in the sidebar.
+2. **Upload PDF**: Upload a document to ingest.
+3. **Ask Questions**: Chat with your document in the main window.
+
 - Exporting structured document JSON
